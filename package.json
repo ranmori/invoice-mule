@@ -1,0 +1,12 @@
+{
+  "name": "invoice-mule",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix api install && npm --prefix app install",
+    "db:migrate": "npm --prefix api run db:migrate",
+    "db:seed": "npm --prefix api run db:seed",
+    "dev:api": "npm --prefix api run dev",
+    "dev:app": "npm --prefix app run start",
+    "test": "npm --prefix api test"
+  }
+}

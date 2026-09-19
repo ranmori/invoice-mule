@@ -1,0 +1,15 @@
+# Render Blueprint for the GraphQL API (free plan: sleeps after ~15 min idle, ~30s cold start).
+services:
+  - type: web
+    name: invoice-mule-api
+    runtime: node
+    plan: free
+    rootDir: api
+    buildCommand: npm ci --include=dev && npm run build && npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /graphql
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false

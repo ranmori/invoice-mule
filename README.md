@@ -1,0 +1,77 @@
+# Invoice Mule
+
+A small invoicing app with an Expo client, a GraphQL API and Postgres, all in TypeScript. You can list invoices, create one with line items, and mark it paid.
+I built it as a working sketch of the kind of thing Sticker Mule's upcoming Invoices tool has to get right.
+The one hard problem I focused on: **invoice numbers are gapless and unique, even when requests arrive at the same moment.**
+
+- **Live app:** _TODO: Vercel URL_
+- **GraphQL API (with GraphiQL):** _TODO: Render URL_/graphql. It runs on a free host, so the first request can take ~30s while it wakes up.
+- **Screen recording (75s):** _TODO: link_
+
+## The interesting part: gapless invoice numbers
+
+Invoice numbers are a legal and accounting sequence. `INV-0007` must not appear twice, and there shouldn't be a missing `INV-0006` that someone has to explain to an accountant.
+
+[`api/src/invoiceNumber.ts`](api/src/invoiceNumber.ts) allocates the number in the **same transaction** as the invoice insert:
+
+```sql
+UPDATE "InvoiceCounter" SET "lastNumber" = "lastNumber" + 1
+WHERE "userId" = $1 RETURNING "lastNumber";
+-- then INSERT the invoice with that number, in the same transaction
+```
+
+- The `UPDATE` takes a row lock on the user's counter, so concurrent creates queue behind each other. Each one reads the value the previous transaction committed.
+- If anything after the increment fails, the whole transaction rolls back, **including the increment**, so no number is burned.
+- A `UNIQUE (userId, number)` constraint is the backstop. Even a future code path that bypasses the counter can't produce a duplicate.
+
+**The test** ([`api/test/gapless.test.ts`](api/test/gapless.test.ts)):
+1. Fires **20 `createInvoice` mutations in parallel** through the real GraphQL handler, then asserts the numbers are exactly `1..20`: no gaps, no duplicates.
+2. Fires 12 parallel creates where every 4th one fails *after* taking a number (bad foreign key). It asserts the 9 survivors are exactly `1..9` and the counter is at 9, which shows a rollback gives the number back.
+
+To check that the test actually catches the race, I temporarily swapped the counter for the naive `SELECT MAX(number) + 1`. The test failed immediately, and the unique constraint rejected the colliding inserts (`Unique constraint failed on the fields: (userId, number)`). So both layers work.
+
+## Run it locally
+
+Requirements: Node 20+ and a Postgres database (I used a free [Neon](https://neon.tech) project with a second branch for tests).
+
+```bash
+npm run install:all
+
+# API: copy api/.env.example to api/.env and fill in DATABASE_URL / DIRECT_URL
+npm run db:migrate          # creates the tables
+npm run db:seed             # demo user, 3 clients, 2 invoices
+npm run dev:api             # http://localhost:4000/graphql
+
+# App: copy app/.env.example to app/.env (defaults to the local API)
+npm run dev:app             # press w for web, or scan the QR code with Expo Go
+
+# Tests: copy api/.env.test.example to api/.env.test, pointing at a DISPOSABLE database.
+# The suite truncates its tables.
+npm test
+```
+
+## Decisions
+
+- **Counter row, not a Postgres `SEQUENCE`.** Sequences are deliberately non-transactional: a rolled-back insert still consumes a value, so you get gaps. **Not `MAX(number)+1` either**, because two transactions can read the same max (demonstrated above). The counter row serializes creates *per user*, which is the right granularity: one seller's invoices never block another's.
+- **The lock is held briefly.** The transaction contains only the increment and the insert. Validation and the client ownership check happen before it starts.
+- **Money is integer cents.** No floats anywhere. Totals are computed on the server from line items, not stored, so they can't drift.
+- **`markPaid` is idempotent.** It is a conditional update (`WHERE status = 'OPEN'`), so a retried request or a double tap returns the same invoice with the original `paidAt`.
+- **The create button is disabled while a request is in flight**, so a double tap can't create (and number) two invoices. The proper server-side fix is an idempotency key. I'd add that next.
+- **GraphQL Yoga with a plain SDL schema, no codegen.** The schema is ~60 lines, and codegen would have taken longer to set up than it saves at this size.
+- **Prisma 6, not 7.** Prisma 7 changes the client and connection setup, and a 3-day build isn't the time to learn that. Neon's pooled URL is used at runtime, the direct URL for migrations, and transaction `maxWait` is raised so a burst of 20 can queue for connections.
+- **urql** on the client, using its document cache and `additionalTypenames` so mutations refresh the lists. It's small and does exactly what three screens need.
+- **Expo Router** with three screens. The same code runs on iOS, Android and web. The live link is the web export, so reviewers can click it without installing anything.
+
+### Deliberately skipped
+
+Following "deprioritize edge cases", I left these out on purpose rather than half-building them:
+
+- **Login.** Every request acts as one seeded demo user. The schema is already per-user (`userId` on everything, counter per user), so adding auth means resolving `userId` from a session instead of a constant.
+- **Payments.** "Mark paid" records that money arrived. It doesn't move any.
+- **PDFs, email delivery, editing or voiding invoices, taxes, discounts, multi-currency, client management** (clients are seeded).
+
+## How I built this with AI tools
+
+_TODO: write this in your own words before submitting, and check it against Sticker Mule's stated AI policy. An honest draft from how this repo was actually built:_
+
+> I built this with Claude Code as a pair programmer. I set the design constraints up front: the stack, the gapless-numbering approach (a counter row in the same transaction plus a unique constraint), what to skip, and the shape of the concurrency test. Claude Code wrote most of the code from that brief: the Prisma schema, the resolvers, the Expo screens and a first draft of this README. I reviewed it, and I verified the test honestly by swapping in a naive `MAX+1` implementation and watching it fail. Claude also drove the web build in a headless browser to click through create → mark paid, which caught two web-only bugs (a render crash and an overflowing input) that type-checking didn't. I'd say the AI saved most of the typing. The decisions about what to guarantee, and how to prove it, were mine.

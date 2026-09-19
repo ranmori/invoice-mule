@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id       String          @id @default(cuid())
+  name     String
+  email    String          @unique
+  clients  Client[]
+  invoices Invoice[]
+  counter  InvoiceCounter?
+}
+
+model Client {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id])
+  name     String
+  email    String
+  invoices Invoice[]
+
+  @@index([userId])
+}
+
+enum InvoiceStatus {
+  OPEN
+  PAID
+}
+
+model Invoice {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id])
+  clientId  String
+  client    Client        @relation(fields: [clientId], references: [id])
+  // Gapless per user. Allocated from InvoiceCounter inside the insert transaction.
+  number    Int
+  status    InvoiceStatus @default(OPEN)
+  issueDate DateTime      @default(now())
+  dueDate   DateTime
+  paidAt    DateTime?
+  createdAt DateTime      @default(now())
+  lineItems LineItem[]
+
+  // Safety net: even a code path that bypasses the counter cannot create a duplicate.
+  @@unique([userId, number])
+}
+
+model LineItem {
+  id             String  @id @default(cuid())
+  invoiceId      String
+  invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description    String
+  quantity       Int
+  // Money is integer cents; never floats.
+  unitPriceCents Int
+
+  @@index([invoiceId])
+}
+
+// One row per user. Incrementing it takes a row lock, which serialises concurrent
+// invoice creation, and it rolls back with the transaction, so no number is ever lost.
+model InvoiceCounter {
+  userId     String @id
+  user       User   @relation(fields: [userId], references: [id])
+  lastNumber Int    @default(0)
+}
