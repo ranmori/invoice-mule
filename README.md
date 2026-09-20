@@ -40,7 +40,14 @@ To check that the test actually catches the race, I temporarily swapped the coun
 
 The tests run against the real Postgres this deploys to (a Neon branch), not an in-memory fake, because the whole point is Postgres locking behaviour.
 
-The same burst against the **deployed** API returned numbers 5–24 with no gaps or duplicates in 3.4s, so this holds in production and not just under test.
+You can run the same burst against any running instance, including the deployed one:
+
+```bash
+npm run burst -- https://invoice-mule-api.onrender.com/graphql 20
+# 20 created in 2916ms / duplicates: 0 / gaps: 0
+```
+
+Against the deployed API that returns 20 consecutive numbers every time, so this holds in production and not just under test.
 
 ## Run it locally
 
