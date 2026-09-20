@@ -7,9 +7,13 @@ let userId: string;
 let clientId: string;
 
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe(
-    `TRUNCATE "LineItem", "Invoice", "Client", "InvoiceCounter", "User" RESTART IDENTITY CASCADE`,
-  );
+  // DELETE, not TRUNCATE: TRUNCATE needs an exclusive table lock, which deadlocks
+  // against transactions still finishing from a previous test.
+  await prisma.$executeRawUnsafe(`DELETE FROM "LineItem"`);
+  await prisma.$executeRawUnsafe(`DELETE FROM "Invoice"`);
+  await prisma.$executeRawUnsafe(`DELETE FROM "Client"`);
+  await prisma.$executeRawUnsafe(`DELETE FROM "InvoiceCounter"`);
+  await prisma.$executeRawUnsafe(`DELETE FROM "User"`);
   const user = await prisma.user.create({
     data: {
       name: "Test Seller",

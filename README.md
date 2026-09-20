@@ -12,23 +12,33 @@ The one hard problem I focused on: **invoice numbers are gapless and unique, eve
 
 Invoice numbers are a legal and accounting sequence. `INV-0007` must not appear twice, and there shouldn't be a missing `INV-0006` that someone has to explain to an accountant.
 
-[`api/src/invoiceNumber.ts`](api/src/invoiceNumber.ts) allocates the number in the **same transaction** as the invoice insert:
+[`api/src/invoiceNumber.ts`](api/src/invoiceNumber.ts) allocates the number in the **same transaction** as the invoice insert. It's a single statement, so the counter bump, the invoice and its line items all commit or all roll back together:
 
 ```sql
-UPDATE "InvoiceCounter" SET "lastNumber" = "lastNumber" + 1
-WHERE "userId" = $1 RETURNING "lastNumber";
--- then INSERT the invoice with that number, in the same transaction
+WITH bump AS (
+  UPDATE "InvoiceCounter" SET "lastNumber" = "lastNumber" + 1
+  WHERE "userId" = $1 RETURNING "lastNumber"
+), invoice AS (
+  INSERT INTO "Invoice" (..., "number", ...) SELECT ..., bump."lastNumber", ... FROM bump RETURNING "id", "number"
+), items AS (
+  INSERT INTO "LineItem" (...) SELECT ... FROM invoice, unnest($5::text[], ...) RETURNING 1
+)
+SELECT "id", "number" FROM invoice;
 ```
 
 - The `UPDATE` takes a row lock on the user's counter, so concurrent creates queue behind each other. Each one reads the value the previous transaction committed.
-- If anything after the increment fails, the whole transaction rolls back, **including the increment**, so no number is burned.
+- If anything fails (a bad client id, say), the statement rolls back, **including the increment**, so no number is burned.
 - A `UNIQUE (userId, number)` constraint is the backstop. Even a future code path that bypasses the counter can't produce a duplicate.
+- The lock is held for exactly one round trip. That matters more than it looks: see the connection-pool note in Decisions.
 
 **The test** ([`api/test/gapless.test.ts`](api/test/gapless.test.ts)):
+
 1. Fires **20 `createInvoice` mutations in parallel** through the real GraphQL handler, then asserts the numbers are exactly `1..20`: no gaps, no duplicates.
 2. Fires 12 parallel creates where every 4th one fails *after* taking a number (bad foreign key). It asserts the 9 survivors are exactly `1..9` and the counter is at 9, which shows a rollback gives the number back.
 
 To check that the test actually catches the race, I temporarily swapped the counter for the naive `SELECT MAX(number) + 1`. The test failed immediately, and the unique constraint rejected the colliding inserts (`Unique constraint failed on the fields: (userId, number)`). So both layers work.
+
+The tests run against the real Postgres this deploys to (a Neon branch), not an in-memory fake, because the whole point is Postgres locking behaviour.
 
 ## Run it locally
 
@@ -53,7 +63,8 @@ npm test
 ## Decisions
 
 - **Counter row, not a Postgres `SEQUENCE`.** Sequences are deliberately non-transactional: a rolled-back insert still consumes a value, so you get gaps. **Not `MAX(number)+1` either**, because two transactions can read the same max (demonstrated above). The counter row serializes creates *per user*, which is the right granularity: one seller's invoices never block another's.
-- **The lock is held briefly.** The transaction contains only the increment and the insert. Validation and the client ownership check happen before it starts.
+- **One statement, not an interactive transaction — because of the connection pool.** My first version opened a Prisma transaction and ran the increment and the inserts as separate queries. It passed against a local Postgres and then failed against Neon: every waiting caller holds a pooled connection *and* its lock wait across three round trips, so 20 parallel creates exhausted the pool and the queued transactions expired. Collapsing it into one statement holds the lock for a single round trip, and the same test passes against a remote database. Latency turns a design that looks fine locally into an outage.
+- **Validation happens before the statement.** Input checks and the client ownership check run first, so nothing avoidable happens while the lock is held.
 - **Money is integer cents.** No floats anywhere. Totals are computed on the server from line items, not stored, so they can't drift.
 - **`markPaid` is idempotent.** It is a conditional update (`WHERE status = 'OPEN'`), so a retried request or a double tap returns the same invoice with the original `paidAt`.
 - **The create button is disabled while a request is in flight**, so a double tap can't create (and number) two invoices. The proper server-side fix is an idempotency key. I'd add that next.
