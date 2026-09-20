@@ -4,8 +4,8 @@ A small invoicing app with an Expo client, a GraphQL API and Postgres, all in Ty
 I built it as a working sketch of the kind of thing Sticker Mule's upcoming Invoices tool has to get right.
 The one hard problem I focused on: **invoice numbers are gapless and unique, even when requests arrive at the same moment.**
 
-- **Live app:** _TODO: Cloudflare Pages URL_
-- **GraphQL API (with GraphiQL):** _TODO: Render URL_/graphql. It runs on a free host, so the first request can take ~30s while it wakes up.
+- **Live app:** https://invoice-mule.pages.dev
+- **GraphQL API (with GraphiQL):** https://invoice-mule-api.onrender.com/graphql. It runs on a free host, so the first request can take ~30s while it wakes up.
 - **Screen recording (75s):** _TODO: link_
 
 ## The interesting part: gapless invoice numbers
@@ -40,6 +40,8 @@ To check that the test actually catches the race, I temporarily swapped the coun
 
 The tests run against the real Postgres this deploys to (a Neon branch), not an in-memory fake, because the whole point is Postgres locking behaviour.
 
+The same burst against the **deployed** API returned numbers 5–24 with no gaps or duplicates in 3.4s, so this holds in production and not just under test.
+
 ## Run it locally
 
 Requirements: Node 20+ and a Postgres database (I used a free [Neon](https://neon.tech) project with a second branch for tests).
@@ -57,7 +59,7 @@ npm run dev:api             # http://localhost:4000/graphql
 npm run dev:app             # press w for web, or scan the QR code with Expo Go
 
 # Tests: copy api/.env.test.example to api/.env.test, pointing at a DISPOSABLE database.
-# The suite truncates its tables.
+# The suite deletes the contents of its tables between cases.
 npm test
 ```
 
@@ -70,7 +72,7 @@ npm test
 - **`markPaid` is idempotent.** It is a conditional update (`WHERE status = 'OPEN'`), so a retried request or a double tap returns the same invoice with the original `paidAt`.
 - **The create button is disabled while a request is in flight**, so a double tap can't create (and number) two invoices. The proper server-side fix is an idempotency key. I'd add that next.
 - **GraphQL Yoga with a plain SDL schema, no codegen.** The schema is ~60 lines, and codegen would have taken longer to set up than it saves at this size.
-- **Prisma 6, not 7.** Prisma 7 changes the client and connection setup, and a 3-day build isn't the time to learn that. Neon's pooled URL is used at runtime, the direct URL for migrations, and transaction `maxWait` is raised so a burst of 20 can queue for connections.
+- **Prisma 6, not 7.** Prisma 7 changes the client and connection setup, and a 3-day build isn't the time to learn that. Neon's pooled URL is used at runtime and the direct URL for migrations, and the client pool is sized in [`api/src/context.ts`](api/src/context.ts) so a burst of 20 queues instead of failing.
 - **Deployment: Cloudflare Pages for the app, Render for the API.** The app is a static Expo web export, so Pages serves it from the edge, with `app/public/_redirects` sending client-side routes back to `index.html`. The API is a plain Node server ([`render.yaml`](render.yaml)) rather than an edge function, because Prisma on Workers needs a driver adapter, and that wasn't where the remaining time was best spent.
 - **urql** on the client, using its document cache and `additionalTypenames` so mutations refresh the lists. It's small and does exactly what three screens need.
 - **Expo Router** with three screens. The same code runs on iOS, Android and web. The live link is the web export, so reviewers can click it without installing anything.
