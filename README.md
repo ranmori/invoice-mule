@@ -4,7 +4,7 @@ A small invoicing app with an Expo client, a GraphQL API and Postgres, all in Ty
 I built it as a working sketch of the kind of thing Sticker Mule's upcoming Invoices tool has to get right.
 The one hard problem I focused on: **invoice numbers are gapless and unique, even when requests arrive at the same moment.**
 
-- **Live app:** _TODO: Vercel URL_
+- **Live app:** _TODO: Cloudflare Pages URL_
 - **GraphQL API (with GraphiQL):** _TODO: Render URL_/graphql. It runs on a free host, so the first request can take ~30s while it wakes up.
 - **Screen recording (75s):** _TODO: link_
 
@@ -52,7 +52,8 @@ npm run db:migrate          # creates the tables
 npm run db:seed             # demo user, 3 clients, 2 invoices
 npm run dev:api             # http://localhost:4000/graphql
 
-# App: copy app/.env.example to app/.env (defaults to the local API)
+# App: copy app/.env.example to app/.env (defaults to the local API).
+# EXPO_PUBLIC_API_URL is baked in at build time, so set it before exporting for deploy.
 npm run dev:app             # press w for web, or scan the QR code with Expo Go
 
 # Tests: copy api/.env.test.example to api/.env.test, pointing at a DISPOSABLE database.
@@ -70,6 +71,7 @@ npm test
 - **The create button is disabled while a request is in flight**, so a double tap can't create (and number) two invoices. The proper server-side fix is an idempotency key. I'd add that next.
 - **GraphQL Yoga with a plain SDL schema, no codegen.** The schema is ~60 lines, and codegen would have taken longer to set up than it saves at this size.
 - **Prisma 6, not 7.** Prisma 7 changes the client and connection setup, and a 3-day build isn't the time to learn that. Neon's pooled URL is used at runtime, the direct URL for migrations, and transaction `maxWait` is raised so a burst of 20 can queue for connections.
+- **Deployment: Cloudflare Pages for the app, Render for the API.** The app is a static Expo web export, so Pages serves it from the edge, with `app/public/_redirects` sending client-side routes back to `index.html`. The API is a plain Node server ([`render.yaml`](render.yaml)) rather than an edge function, because Prisma on Workers needs a driver adapter, and that wasn't where the remaining time was best spent.
 - **urql** on the client, using its document cache and `additionalTypenames` so mutations refresh the lists. It's small and does exactly what three screens need.
 - **Expo Router** with three screens. The same code runs on iOS, Android and web. The live link is the web export, so reviewers can click it without installing anything.
 
