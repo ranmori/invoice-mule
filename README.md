@@ -6,7 +6,7 @@ The one hard problem I focused on: **invoice numbers are gapless and unique, eve
 
 - **Live app:** https://invoice-mule.pages.dev
 - **GraphQL API (with GraphiQL):** https://invoice-mule-api.onrender.com/graphql. It runs on a free host, so the first request can take ~30s while it wakes up.
-- **Screen recording (75s):** _TODO: link_
+- **Screen recording:** https://youtu.be/kRm6qczmfY0
 
 ## The interesting part: gapless invoice numbers
 
