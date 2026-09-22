@@ -12,7 +12,7 @@ The one hard problem I focused on: **invoice numbers are gapless and unique, eve
 
 Invoice numbers are a legal and accounting sequence. `INV-0007` must not appear twice, and there shouldn't be a missing `INV-0006` that someone has to explain to an accountant.
 
-[`api/src/invoiceNumber.ts`](api/src/invoiceNumber.ts) allocates the number in the **same transaction** as the invoice insert. It's a single statement, so the counter bump, the invoice and its line items all commit or all roll back together:
+[`api/src/invoiceNumber.ts`](api/src/invoiceNumber.ts) allocates the number in the **same statement** as the invoice insert (and so the same transaction). The counter bump, the invoice and its line items all commit or all roll back together:
 
 ```sql
 WITH bump AS (
@@ -29,12 +29,14 @@ SELECT "id", "number" FROM invoice;
 - The `UPDATE` takes a row lock on the user's counter, so concurrent creates queue behind each other. Each one reads the value the previous transaction committed.
 - If anything fails (a bad client id, say), the statement rolls back, **including the increment**, so no number is burned.
 - A `UNIQUE (userId, number)` constraint is the backstop. Even a future code path that bypasses the counter can't produce a duplicate.
+- If the counter row is missing, the `UPDATE` matches nothing and the statement inserts zero rows without any SQL error. The caller checks for an empty result and throws, so that can't pass silently.
 - The lock is held for exactly one round trip. That matters more than it looks: see the connection-pool note in Decisions.
 
 **The test** ([`api/test/gapless.test.ts`](api/test/gapless.test.ts)):
 
 1. Fires **20 `createInvoice` mutations in parallel** through the real GraphQL handler, then asserts the numbers are exactly `1..20`: no gaps, no duplicates.
 2. Fires 12 parallel creates where every 4th one fails *after* taking a number (bad foreign key). It asserts the 9 survivors are exactly `1..9` and the counter is at 9, which shows a rollback gives the number back.
+3. Deletes the counter row and asserts a create throws and inserts nothing, rather than silently doing nothing.
 
 To check that the test actually catches the race, I temporarily swapped the counter for the naive `SELECT MAX(number) + 1`. The test failed immediately, and the unique constraint rejected the colliding inserts (`Unique constraint failed on the fields: (userId, number)`). So both layers work.
 

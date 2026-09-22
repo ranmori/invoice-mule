@@ -89,4 +89,22 @@ describe("gapless invoice numbers", () => {
     const counter = await prisma.invoiceCounter.findUniqueOrThrow({ where: { userId } });
     expect(counter.lastNumber).toBe(9);
   });
+
+  it("a missing counter row is an error, not a silent no-op", async () => {
+    // With no counter row the UPDATE matches nothing, so the CTE inserts zero rows
+    // and raises no SQL error. The caller must notice and throw.
+    await prisma.invoiceCounter.delete({ where: { userId } });
+
+    await expect(
+      createInvoiceWithNumber(prisma, {
+        userId,
+        clientId,
+        dueDate: new Date("2026-12-31"),
+        lineItems: [{ description: "Orphan", quantity: 1, unitPriceCents: 100 }],
+      }),
+    ).rejects.toThrow("No invoice counter");
+
+    expect(await prisma.invoice.count()).toBe(0);
+    expect(await prisma.lineItem.count()).toBe(0);
+  });
 });
